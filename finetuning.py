@@ -67,19 +67,37 @@ val_tok   = val_ds.map(tok_fn,   batched=True, remove_columns=["src","tgt"])
 logger.info("Tokenization complete.")
 
 # -----------------------------
-# Model + SALT (LoRA)
+# Model + LoRA (SALT style)
 # -----------------------------
 logger.info(f"Loading base model {base_model}...")
-model = AutoModelForSeq2SeqLM.from_pretrained(base_model, torch_dtype=torch.bfloat16)
+model = AutoModelForSeq2SeqLM.from_pretrained(base_model, torch_dtype=torch.float32)
 
-logger.info("Configuring SALT (LoRA) adapters...")
+# -----------------------------
+# Correct LoRA configuration for mT5
+# -----------------------------
+logger.info("Configuring LoRA adapters for mT5...")
+
+# LoRA targets for T5/mT5:
+# Encoder/decoder blocks contain modules like:
+# 'SelfAttention.q', 'SelfAttention.k', 'SelfAttention.v', 'SelfAttention.o'
+# 'DenseReluDense.wi', 'DenseReluDense.wo'
+# So we use substring matching for these patterns.
 peft_cfg = LoraConfig(
     r=8,
     lora_alpha=16,
     lora_dropout=0.05,
-    target_modules=["q","k","v","o","wi","wo"],
-    bias="none"
+    target_modules=[
+        "SelfAttention.q",
+        "SelfAttention.k",
+        "SelfAttention.v",
+        "SelfAttention.o",
+        "DenseReluDense.wi",
+        "DenseReluDense.wo"
+    ],
+    bias="none",
+    task_type="SEQ_2_SEQ_LM"
 )
+
 model = get_peft_model(model, peft_cfg)
 model.print_trainable_parameters()
 
@@ -108,13 +126,12 @@ args = Seq2SeqTrainingArguments(
     learning_rate=2e-4,
     warmup_ratio=0.05,
     logging_steps=10,
-    # evaluation_strategy="epoch",
     save_strategy="epoch",
     save_total_limit=2,
     predict_with_generate=True,
     bf16=torch.cuda.is_available(),
     report_to="none",
-    logging_dir="logs"  # saves HF logs
+    logging_dir="logs"
 )
 
 trainer = Seq2SeqTrainer(
@@ -133,6 +150,11 @@ trainer = Seq2SeqTrainer(
 logger.info("🚀 Starting training...")
 trainer.train()
 logger.info("✅ Training complete.")
+
+# -----------------------------
+# Sanity check: ensure LoRA attached
+# -----------------------------
+model.print_trainable_parameters()
 
 # -----------------------------
 # Save
