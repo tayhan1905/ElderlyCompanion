@@ -72,16 +72,8 @@ logger.info("Tokenization complete.")
 logger.info(f"Loading base model {base_model}...")
 model = AutoModelForSeq2SeqLM.from_pretrained(base_model, torch_dtype=torch.float32)
 
-# -----------------------------
 # Correct LoRA configuration for mT5
-# -----------------------------
 logger.info("Configuring LoRA adapters for mT5...")
-
-# LoRA targets for T5/mT5:
-# Encoder/decoder blocks contain modules like:
-# 'SelfAttention.q', 'SelfAttention.k', 'SelfAttention.v', 'SelfAttention.o'
-# 'DenseReluDense.wi', 'DenseReluDense.wo'
-# So we use substring matching for these patterns.
 peft_cfg = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -97,7 +89,6 @@ peft_cfg = LoraConfig(
     bias="none",
     task_type="SEQ_2_SEQ_LM"
 )
-
 model = get_peft_model(model, peft_cfg)
 model.print_trainable_parameters()
 
@@ -152,14 +143,49 @@ trainer.train()
 logger.info("✅ Training complete.")
 
 # -----------------------------
-# Sanity check: ensure LoRA attached
+# Verify LoRA attachment
 # -----------------------------
 model.print_trainable_parameters()
 
 # -----------------------------
-# Save
+# Save adapter + tokenizer
 # -----------------------------
+adapter_dir = "outputs-salt/adapter"
+tok_dir = "outputs-salt/tokenizer"
 logger.info("Saving adapter and tokenizer...")
-model.save_pretrained("outputs-salt/adapter")
-tok.save_pretrained("outputs-salt/tokenizer")
-logger.info("✅ Saved adapter + tokenizer to outputs-salt/")
+model.save_pretrained(adapter_dir)
+tok.save_pretrained(tok_dir)
+logger.info(f"✅ Saved adapter to {adapter_dir} and tokenizer to {tok_dir}")
+
+# -----------------------------
+# Inference sanity check
+# -----------------------------
+logger.info("🔍 Running post-training inference sanity check...")
+
+def translate_singlish(sentence, max_length=128):
+    prompt = f"Translate Singlish to English:\nSinglish: {sentence}\nEnglish:"
+    inputs = tok(prompt, return_tensors="pt", truncation=True).to(model.device)
+    model.eval()
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_length=max_length,
+            num_beams=5,
+            early_stopping=True,
+        )
+    translation = tok.decode(outputs[0], skip_special_tokens=True)
+    return translation
+
+# Example sentences to verify translation quality
+examples = [
+    "wah the weather damn hot today leh",
+    "you eat already or not?",
+    "don’t play play ah, this one very expensive!",
+    "later I go your house then we study together lah",
+]
+
+for ex in examples:
+    print(f"\n🗣️ Singlish: {ex}")
+    print(f"💬 English: {translate_singlish(ex)}")
+
+logger.info("✅ Inference sanity check complete.")
